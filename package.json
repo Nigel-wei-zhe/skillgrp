@@ -2,8 +2,26 @@
   "name": "skillgrp",
   "version": "0.1.0",
   "description": "互動式 agent skill 群組管理 — 依情境載入/卸載 skills，並同步 symlink 到各家 AI agent",
-  "bin": { "skillgrp": "./skillgrp" },
-  "engines": { "node": ">=18" },
-  "files": ["skillgrp", "README.md"],
-  "license": "MIT"
+  "bin": {
+    "skillgrp": "skillgrp"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "skillgrp",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "author": "Nigel",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nigel-wei-zhe/skillgrp.git"
+  },
+  "homepage": "https://github.com/Nigel-wei-zhe/skillgrp#readme",
+  "bugs": {
+    "url": "https://github.com/Nigel-wei-zhe/skillgrp/issues"
+  },
+  "keywords": ["skills", "agent", "claude", "cli", "symlink"]
 }
