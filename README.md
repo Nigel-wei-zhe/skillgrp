@@ -109,7 +109,9 @@ skillgrp
 }
 ```
 
-預設會嘗試 `.claude` `.codex` `.cursor` `.gemini` `.opencode` `.windsurf`，不存在的自動略過。
+預設會嘗試 `.claude` `.codex` `.cursor` `.gemini` `.config/opencode` `.codeium/windsurf`，不存在的自動略過。
+其他 agent 需要的話，照 [`npx skills` 官方對照表](https://github.com/vercel-labs/skills#supported-agents) 的
+Global Path 欄位自己加進 `agentDirs`。
 
 部分 agent 的 skills 目錄不是 `~/.<agent>/skills`，而是巢狀更深，例如 Antigravity CLI 是
 `~/.gemini/antigravity-cli/skills`。`agentDirs` 的每一項會直接接上 `skills`，所以巢狀路徑照樣
@@ -119,7 +121,7 @@ skillgrp
 {
   "version": 1,
   "agentDirs": [
-    ".claude", ".codex", ".cursor", ".gemini", ".opencode", ".windsurf",
+    ".claude", ".codex", ".cursor", ".gemini", ".config/opencode", ".codeium/windsurf",
     ".gemini/antigravity-cli"
   ],
   "groups": {

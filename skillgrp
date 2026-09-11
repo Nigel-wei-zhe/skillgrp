@@ -22,7 +22,7 @@ const ROOT = path.join(HOME, '.agents');
 const SKILLS = path.join(ROOT, 'skills');
 const VAULT = path.join(ROOT, 'vault');
 const MANIFEST = path.join(ROOT, 'skill-groups.json');
-const DEFAULT_AGENT_DIRS = ['.claude', '.codex', '.cursor', '.gemini', '.opencode', '.windsurf'];
+const DEFAULT_AGENT_DIRS = ['.claude', '.codex', '.cursor', '.gemini', '.config/opencode', '.codeium/windsurf'];
 
 const C = {
   reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
