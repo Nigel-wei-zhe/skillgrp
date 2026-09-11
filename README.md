@@ -1,5 +1,7 @@
 # skillgrp
 
+[![npm version](https://img.shields.io/npm/v/skillgrp.svg)](https://www.npmjs.com/package/skillgrp)
+
 互動式 **agent skill 群組管理**。把 `npx skills` 裝好的 skills 編成群組，平常收在 vault 裡不佔
 agent 的 context，需要時一個指令載入並同步 symlink 到各家 AI agent。
 
