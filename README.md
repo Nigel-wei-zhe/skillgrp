@@ -89,7 +89,7 @@ skillgrp
 
 ## 設定
 
-`~/.agents/skill-groups.json` 的 `agentDirs` 可覆寫同步對象（相對於 `$HOME` 的目錄名）：
+`~/.agents/skill-groups.json` 的 `agentDirs` 可覆寫同步對象（相對於 `$HOME` 的目錄，可以是多層路徑）：
 
 ```json
 {
@@ -100,6 +100,24 @@ skillgrp
 ```
 
 預設會嘗試 `.claude` `.codex` `.cursor` `.gemini` `.opencode` `.windsurf`，不存在的自動略過。
+
+部分 agent 的 skills 目錄不是 `~/.<agent>/skills`，而是巢狀更深，例如 Antigravity CLI 是
+`~/.gemini/antigravity-cli/skills`。`agentDirs` 的每一項會直接接上 `skills`，所以巢狀路徑照樣
+可以寫，該目錄要先存在（`mkdir -p`）才會被偵測到：
+
+```json
+{
+  "version": 1,
+  "agentDirs": [
+    ".claude", ".codex", ".cursor", ".gemini", ".opencode", ".windsurf",
+    ".gemini/antigravity-cli"
+  ],
+  "groups": {
+    "blog": { "skills": ["blog-poster", "blog-reviewer", "blog-workflow", "feynman-blog"] },
+    "third-party": { "skills": ["herdr", "opencli-browser", "opencli-explorer"] }
+  }
+}
+```
 
 環境變數 `SKILLGRP_HOME` 可指向別的 HOME，方便在沙箱試跑。
 
