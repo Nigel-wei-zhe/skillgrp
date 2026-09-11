@@ -77,6 +77,13 @@ skillgrp
 | `skillgrp unload <群組>...` | 卸載 |
 | `skillgrp sync` | 重新連結所有已載入的 skill 到各家 agent |
 | `skillgrp update` | 全部載入 → `npx skills update` → 還原原本狀態 |
+| `skillgrp create <群組> <skill>...` | 非互動建立群組（建立後仍是常駐，不會自動卸載） |
+| `skillgrp rename <舊名> <新名>` | 群組改名 |
+| `skillgrp delete <群組>`（別名 `rm`） | 刪除群組，成員搬回 `skills/` 並載入，不刪 skill 本身 |
+| `skillgrp add <群組> <skill>...` | 加入成員 |
+| `skillgrp drop <群組> <skill>...` | 移除成員 |
+
+以上非互動指令跟互動介面共用同一套邏輯，適合寫進 dotfiles 初始化腳本或 CI。
 
 > 切換後需**開新的 agent session** 才會生效（skill 清單在 session 啟動時掃描）。
 

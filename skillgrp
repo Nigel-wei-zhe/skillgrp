@@ -104,22 +104,44 @@ function moveDir(from, to) {
   }
 }
 
+/** 單一 skill 處理失敗不中斷整批，收集失敗清單讓呼叫端知道群組可能不一致 */
 function loadGroup(m, g, log = console.log) {
   const members = m.groups[g].skills;
+  const failed = [];
   for (const s of members) {
-    if (inSkills(s)) { /* 已在位 */ }
-    else if (inVault(g, s)) { moveDir(vaultPath(g, s), path.join(SKILLS, s)); log(`${C.cyan}move${C.reset}  vault/${g}/${s} → skills/${s}`); }
-    else { log(`${C.red}miss${C.reset}  ${s}（skills/ 與 vault 都找不到，跳過）`); continue; }
-    linkAgents(m, s, log);
+    try {
+      if (inSkills(s)) { /* 已在位 */ }
+      else if (inVault(g, s)) { moveDir(vaultPath(g, s), path.join(SKILLS, s)); log(`${C.cyan}move${C.reset}  vault/${g}/${s} → skills/${s}`); }
+      else { log(`${C.red}miss${C.reset}  ${s}（skills/ 與 vault 都找不到，跳過）`); continue; }
+      linkAgents(m, s, log);
+    } catch (e) { failed.push(s); log(`${C.red}fail${C.reset}  ${s}：${e.message}`); }
   }
   try { fs.rmdirSync(path.join(VAULT, g)); } catch {}
+  if (failed.length) log(`${C.yellow}警告${C.reset}  ${g} 有 ${failed.length} 個 skill 處理失敗（${failed.join(', ')}），群組可能不一致，可重跑 skillgrp load ${g}`);
+  return failed;
 }
 function unloadGroup(m, g, log = console.log) {
   const members = m.groups[g].skills;
+  const failed = [];
   for (const s of members) {
-    unlinkAgents(m, s, log);
-    if (inSkills(s)) { moveDir(path.join(SKILLS, s), vaultPath(g, s)); log(`${C.cyan}move${C.reset}  skills/${s} → vault/${g}/${s}`); }
+    try {
+      unlinkAgents(m, s, log);
+      if (inSkills(s)) { moveDir(path.join(SKILLS, s), vaultPath(g, s)); log(`${C.cyan}move${C.reset}  skills/${s} → vault/${g}/${s}`); }
+    } catch (e) { failed.push(s); log(`${C.red}fail${C.reset}  ${s}：${e.message}`); }
   }
+  if (failed.length) log(`${C.yellow}警告${C.reset}  ${g} 有 ${failed.length} 個 skill 處理失敗（${failed.join(', ')}），群組可能不一致，可重跑 skillgrp unload ${g}`);
+  return failed;
+}
+/** 增減群組成員：離開群組的搬回 skills/ 並連結；群組原本是卸載狀態時，新加入的成員也會被卸載 */
+function setGroupMembers(m, g, picked, log = console.log) {
+  const st = groupState(g, m.groups[g].skills);
+  const added = picked.filter((s) => !m.groups[g].skills.includes(s));
+  const removed = m.groups[g].skills.filter((s) => !picked.includes(s));
+  m.groups[g].skills = picked;
+  saveManifest(m);
+  for (const s of removed) if (inVault(g, s)) { moveDir(vaultPath(g, s), path.join(SKILLS, s)); linkAgents(m, s, log); }
+  if (st === 'unloaded') for (const s of added) { unlinkAgents(m, s, log); if (inSkills(s)) moveDir(path.join(SKILLS, s), vaultPath(g, s)); }
+  return { added, removed };
 }
 
 // ── 純文字輸出 ──────────────────────────────────────────────────────────
@@ -316,17 +338,11 @@ async function uiEdit(m) {
   ]);
   console.log('');
   if (act === 'members') {
-    const st = groupState(g, m.groups[g].skills);
     const pool = [...new Set([...m.groups[g].skills, ...freeSkills(m)])].sort();
     const picked = await select(`${C.bold}${g}${C.reset} 的成員`, pool.map((s) => ({ label: s, value: s })), { multi: true, preselected: m.groups[g].skills });
     if (!picked) return;
-    const added = picked.filter((s) => !m.groups[g].skills.includes(s));
-    const removed = m.groups[g].skills.filter((s) => !picked.includes(s));
-    m.groups[g].skills = picked;
-    saveManifest(m);
     console.log('');
-    for (const s of removed) if (inVault(g, s)) { moveDir(vaultPath(g, s), path.join(SKILLS, s)); linkAgents(m, s, console.log); }
-    if (st === 'unloaded') for (const s of added) { unlinkAgents(m, s, console.log); if (inSkills(s)) moveDir(path.join(SKILLS, s), vaultPath(g, s)); }
+    const { added, removed } = setGroupMembers(m, g, picked, console.log);
     console.log(`\n${C.green}已更新${C.reset} ${g}：+${added.length} -${removed.length}`);
   } else if (act === 'rename') {
     const nn = await ask('新名稱：', g);
@@ -375,12 +391,17 @@ async function menu() {
 // ── 入口 ────────────────────────────────────────────────────────────────
 const USAGE = `${C.bold}skillgrp${C.reset} — 互動式 skill 群組管理
 
-  skillgrp                 進入互動介面
-  skillgrp ls              列出群組與狀態
-  skillgrp load <群組>...   載入（vault → skills/ 並連結各家 agent）
-  skillgrp unload <群組>... 卸載（拔連結 → 搬回 vault）
-  skillgrp sync            重新連結所有已載入 skill 到各家 agent
-  skillgrp update          全部載入 → npx skills update → 還原原本狀態
+  skillgrp                     進入互動介面
+  skillgrp ls                  列出群組與狀態
+  skillgrp load <群組>...       載入（vault → skills/ 並連結各家 agent）
+  skillgrp unload <群組>...     卸載（拔連結 → 搬回 vault）
+  skillgrp sync                重新連結所有已載入 skill 到各家 agent
+  skillgrp update              全部載入 → npx skills update → 還原原本狀態
+  skillgrp create <群組> <skill>...  建立群組（非互動，不會自動卸載）
+  skillgrp rename <舊名> <新名>       群組改名
+  skillgrp delete <群組>              刪除群組（成員搬回 skills/ 並載入，不刪 skill 本身；別名 rm）
+  skillgrp add <群組> <skill>...      加入成員
+  skillgrp drop <群組> <skill>...     移除成員
 
 佈局：${tilde(SKILLS)} / ${tilde(VAULT)} / ${tilde(MANIFEST)}`;
 
@@ -392,11 +413,14 @@ const USAGE = `${C.bold}skillgrp${C.reset} — 互動式 skill 群組管理
     case 'ls': case 'status': printStatus(m); break;
     case 'load': case 'unload': {
       if (!args.length) die(`用法：skillgrp ${cmd} <群組>...`);
+      let anyFailed = false;
       for (const g of args) {
         if (!m.groups[g]) die(`沒有群組 ${g}`);
-        cmd === 'load' ? loadGroup(m, g) : unloadGroup(m, g);
+        const failed = cmd === 'load' ? loadGroup(m, g) : unloadGroup(m, g);
+        if (failed.length) anyFailed = true;
       }
       console.log(`${C.dim}開新的 agent session 才會生效。${C.reset}`);
+      if (anyFailed) process.exitCode = 1;
       break;
     }
     case 'sync': for (const s of listDir(SKILLS)) linkAgents(m, s, console.log); break;
@@ -404,12 +428,76 @@ const USAGE = `${C.bold}skillgrp${C.reset} — 互動式 skill 群組管理
       const off = Object.keys(m.groups).filter((g) => groupState(g, m.groups[g].skills) !== 'loaded');
       for (const g of off) loadGroup(m, g, () => {});
       console.log(`${C.dim}暫時載入：${off.join(', ') || '(無)'}${C.reset}`);
-      require('child_process').spawnSync('npx', ['-y', 'skills', 'update', '-g', '-y'], { stdio: 'inherit' });
+      const res = require('child_process').spawnSync('npx', ['-y', 'skills', 'update', '-g', '-y'], { stdio: 'inherit' });
       for (const g of off) unloadGroup(m, g, () => {});
       console.log(`${C.dim}已還原卸載狀態：${off.join(', ') || '(無)'}${C.reset}`);
+      if (res.error) die(`npx skills update 執行失敗：${res.error.message}`);
+      if (res.status !== 0) {
+        console.error(`${C.red}警告：${C.reset}npx skills update 結束碼非 0（${res.status}），更新可能沒有完全成功`);
+        process.exitCode = res.status;
+      }
+      break;
+    }
+    case 'create': {
+      if (args.length < 2) die(`用法：skillgrp create <群組> <skill>...`);
+      const [name, ...skills] = args;
+      if (m.groups[name]) die(`群組 ${name} 已存在`);
+      if (!isValidGroupName(name)) die(`名稱只接受英數 . _ -，且不能是 . 或 ..`);
+      const free = freeSkills(m);
+      for (const s of skills) if (!free.includes(s)) die(`skill ${s} 不是未編組的 skill（不存在或已屬於其他群組）`);
+      m.groups[name] = { skills: [...new Set(skills)] };
+      saveManifest(m);
+      console.log(`${C.green}已建立${C.reset} ${name}：${m.groups[name].skills.join(', ')}`);
+      console.log(`${C.dim}目前仍是常駐狀態，跑 skillgrp unload ${name} 收進 vault。${C.reset}`);
+      break;
+    }
+    case 'rename': {
+      if (args.length !== 2) die(`用法：skillgrp rename <舊名> <新名>`);
+      const [g, nn] = args;
+      if (!m.groups[g]) die(`沒有群組 ${g}`);
+      if (m.groups[nn]) die(`群組 ${nn} 已存在`);
+      if (!isValidGroupName(nn)) die(`名稱只接受英數 . _ -，且不能是 . 或 ..`);
+      if (fs.existsSync(path.join(VAULT, g))) moveDir(path.join(VAULT, g), path.join(VAULT, nn));
+      m.groups[nn] = m.groups[g]; delete m.groups[g];
+      saveManifest(m);
+      console.log(`${C.green}已改名${C.reset} ${g} → ${nn}`);
+      break;
+    }
+    case 'delete': case 'rm': {
+      if (args.length !== 1) die(`用法：skillgrp ${cmd} <群組>`);
+      const g = args[0];
+      if (!m.groups[g]) die(`沒有群組 ${g}`);
+      loadGroup(m, g);
+      delete m.groups[g];
+      saveManifest(m);
+      try { fs.rmdirSync(path.join(VAULT, g)); } catch {}
+      console.log(`${C.green}已刪除群組${C.reset} ${g}（成員已搬回 skills/ 並連結）`);
+      break;
+    }
+    case 'add': {
+      if (args.length < 2) die(`用法：skillgrp add <群組> <skill>...`);
+      const [g, ...skills] = args;
+      if (!m.groups[g]) die(`沒有群組 ${g}`);
+      const free = freeSkills(m);
+      for (const s of skills) {
+        if (m.groups[g].skills.includes(s)) continue;
+        if (!free.includes(s)) die(`skill ${s} 不是未編組的 skill（不存在或已屬於其他群組）`);
+      }
+      const picked = [...new Set([...m.groups[g].skills, ...skills])];
+      const { added, removed } = setGroupMembers(m, g, picked, console.log);
+      console.log(`${C.green}已更新${C.reset} ${g}：+${added.length} -${removed.length}`);
+      break;
+    }
+    case 'drop': {
+      if (args.length < 2) die(`用法：skillgrp drop <群組> <skill>...`);
+      const [g, ...skills] = args;
+      if (!m.groups[g]) die(`沒有群組 ${g}`);
+      const picked = m.groups[g].skills.filter((s) => !skills.includes(s));
+      const { added, removed } = setGroupMembers(m, g, picked, console.log);
+      console.log(`${C.green}已更新${C.reset} ${g}：+${added.length} -${removed.length}`);
       break;
     }
     default: console.log(USAGE);
   }
-  process.exit(0);
+  process.exit(process.exitCode || 0);
 })().catch((e) => die(e.stack || e.message));
