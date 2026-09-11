@@ -1,0 +1,411 @@
+#!/usr/bin/env node
+'use strict';
+/*
+ * skillgrp — 互動式 skill 群組管理
+ *
+ * 資料佈局：
+ *   ~/.agents/skills/<skill>          已載入（npx skills 認得的位置）
+ *   ~/.agents/vault/<group>/<skill>   已編組但未載入（移出 skills/ 控管）
+ *   ~/.agents/skill-groups.json       群組定義（唯一的成員名單來源）
+ *   ~/.<agent>/skills/<skill>         各家 agent 的相對 symlink
+ *
+ * 載入 = vault → skills/ 搬回來 + 連結各家 agent
+ * 卸載 = 拔掉各家 agent 連結 + skills/ → vault 搬走
+ */
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const HOME = process.env.SKILLGRP_HOME || os.homedir();
+const ROOT = path.join(HOME, '.agents');
+const SKILLS = path.join(ROOT, 'skills');
+const VAULT = path.join(ROOT, 'vault');
+const MANIFEST = path.join(ROOT, 'skill-groups.json');
+const DEFAULT_AGENT_DIRS = ['.claude', '.codex', '.cursor', '.gemini', '.opencode', '.windsurf'];
+
+const C = {
+  reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+  green: '\x1b[32m', yellow: '\x1b[33m', red: '\x1b[31m',
+  cyan: '\x1b[36m', gray: '\x1b[90m', inv: '\x1b[7m',
+};
+const tilde = (p) => p.startsWith(HOME) ? '~' + p.slice(HOME.length) : p;
+const die = (msg) => { console.error(`${C.red}error:${C.reset} ${msg}`); process.exit(1); };
+
+// ── 狀態 ────────────────────────────────────────────────────────────────
+function loadManifest() {
+  if (!fs.existsSync(MANIFEST)) return { version: 1, groups: {}, agentDirs: null };
+  try {
+    const m = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
+    m.groups = m.groups || {};
+    return m;
+  } catch (e) { die(`${tilde(MANIFEST)} 解析失敗：${e.message}`); }
+}
+function saveManifest(m) {
+  fs.mkdirSync(ROOT, { recursive: true });
+  fs.writeFileSync(MANIFEST, JSON.stringify(m, null, 2) + '\n');
+}
+function agentDirs(m) {
+  const names = m.agentDirs || DEFAULT_AGENT_DIRS;
+  return names.map((n) => path.join(HOME, n, 'skills')).filter((d) => fs.existsSync(d));
+}
+const listDir = (d) => fs.existsSync(d) ? fs.readdirSync(d).filter((n) => !n.startsWith('.')) : [];
+const inSkills = (n) => fs.existsSync(path.join(SKILLS, n));
+const vaultPath = (g, n) => path.join(VAULT, g, n);
+const inVault = (g, n) => fs.existsSync(vaultPath(g, n));
+
+function groupState(g, members) {
+  if (!members.length) return 'empty';
+  const on = members.filter(inSkills).length;
+  if (on === members.length) return 'loaded';
+  if (on === 0) return 'unloaded';
+  return 'mixed';
+}
+function ownerOf(m, skill) {
+  for (const [g, def] of Object.entries(m.groups)) if (def.skills.includes(skill)) return g;
+  return null;
+}
+/** skills/ 裡沒被任何群組認領的 → 永遠在線 */
+function freeSkills(m) {
+  return listDir(SKILLS).filter((n) => !ownerOf(m, n));
+}
+
+// ── 檔案操作 ────────────────────────────────────────────────────────────
+function linkAgents(m, skill, log) {
+  for (const dir of agentDirs(m)) {
+    const dest = path.join(dir, skill);
+    if (fs.existsSync(dest) && !fs.lstatSync(dest).isSymbolicLink()) {
+      log(`${C.yellow}skip${C.reset}  ${tilde(dest)}（實體檔案，不動它）`);
+      continue;
+    }
+    try { fs.unlinkSync(dest); } catch {}
+    fs.symlinkSync(path.join('../../.agents/skills', skill), dest);
+    log(`${C.green}link${C.reset}  ${tilde(dest)}`);
+  }
+}
+function unlinkAgents(m, skill, log) {
+  for (const dir of agentDirs(m)) {
+    const dest = path.join(dir, skill);
+    let st; try { st = fs.lstatSync(dest); } catch { continue; }
+    if (!st.isSymbolicLink()) { log(`${C.yellow}skip${C.reset}  ${tilde(dest)}（實體檔案，不動它）`); continue; }
+    fs.unlinkSync(dest);
+    log(`${C.gray}unlink${C.reset} ${tilde(dest)}`);
+  }
+}
+function moveDir(from, to) {
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  try { fs.renameSync(from, to); }
+  catch (e) {
+    if (e.code !== 'EXDEV') throw e;
+    fs.cpSync(from, to, { recursive: true });
+    fs.rmSync(from, { recursive: true, force: true });
+  }
+}
+
+function loadGroup(m, g, log = console.log) {
+  const members = m.groups[g].skills;
+  for (const s of members) {
+    if (inSkills(s)) { /* 已在位 */ }
+    else if (inVault(g, s)) { moveDir(vaultPath(g, s), path.join(SKILLS, s)); log(`${C.cyan}move${C.reset}  vault/${g}/${s} → skills/${s}`); }
+    else { log(`${C.red}miss${C.reset}  ${s}（skills/ 與 vault 都找不到，跳過）`); continue; }
+    linkAgents(m, s, log);
+  }
+  try { fs.rmdirSync(path.join(VAULT, g)); } catch {}
+}
+function unloadGroup(m, g, log = console.log) {
+  const members = m.groups[g].skills;
+  for (const s of members) {
+    unlinkAgents(m, s, log);
+    if (inSkills(s)) { moveDir(path.join(SKILLS, s), vaultPath(g, s)); log(`${C.cyan}move${C.reset}  skills/${s} → vault/${g}/${s}`); }
+  }
+}
+
+// ── 純文字輸出 ──────────────────────────────────────────────────────────
+const badge = (st) => ({
+  loaded: `${C.green}● 已載入${C.reset}`, unloaded: `${C.gray}○ 未載入${C.reset}`,
+  mixed: `${C.yellow}◐ 不一致${C.reset}`, empty: `${C.gray}· 空群組${C.reset}`,
+}[st]);
+
+function printStatus(m) {
+  const names = Object.keys(m.groups).sort();
+  console.log(`\n${C.bold}群組${C.reset} ${C.dim}(${tilde(ROOT)})${C.reset}`);
+  if (!names.length) console.log(`  ${C.dim}尚未建立任何群組${C.reset}`);
+  for (const g of names) {
+    const sk = m.groups[g].skills;
+    console.log(`  ${badge(groupState(g, sk))}  ${C.bold}${g}${C.reset} ${C.dim}(${sk.length})${C.reset}`);
+    for (const s of sk) {
+      const mark = inSkills(s) ? `${C.green}●${C.reset}` : inVault(g, s) ? `${C.gray}○${C.reset}` : `${C.red}?${C.reset}`;
+      console.log(`      ${mark} ${s}`);
+    }
+  }
+  const free = freeSkills(m);
+  console.log(`\n${C.bold}未編組${C.reset} ${C.dim}(常駐在線)${C.reset}`);
+  if (!free.length) console.log(`  ${C.dim}(無)${C.reset}`);
+  let unlinked = 0;
+  for (const s of free) {
+    const linked = agentDirs(m).every((d) => fs.existsSync(path.join(d, s)));
+    if (!linked) unlinked++;
+    console.log(`  ${linked ? C.green + "●" : C.yellow + "◐"}${C.reset} ${s}${linked ? "" : ` ${C.dim}(未連結到部分 agent — 跑 skillgrp sync)${C.reset}`}`);
+  }
+  const dirs = agentDirs(m).map((d) => tilde(path.dirname(d)));
+  console.log(`\n${C.dim}同步對象：${dirs.join('  ') || '(無)'}${C.reset}`);
+  console.log(`${C.dim}切換後需開新的 agent session 才會生效。${C.reset}\n`);
+}
+
+// ── 互動元件 ────────────────────────────────────────────────────────────
+const out = (s) => process.stdout.write(s);
+function requireTTY() {
+  if (!process.stdin.isTTY) die('非互動終端；請用 skillgrp ls / load / unload 等子指令。');
+}
+
+/* 鍵盤輸入層：單一 stdin listener，處理被拆開送達的 escape sequence。
+   收到孤立的 \x1b 時等 30ms，有後續位元組就當方向鍵，沒有才算 Esc。 */
+const KEYQ = [];
+const WAITERS = [];
+let pending = '', escTimer = null, started = false, ended = false;
+function pushKey(k) { WAITERS.length ? WAITERS.shift()(k) : KEYQ.push(k); }
+function drain(force) {
+  clearTimeout(escTimer); escTimer = null;
+  while (pending.length) {
+    if (pending[0] === '\x1b') {
+      const m = pending.match(/^\x1b(\[[0-9;]*[~A-Za-z]|O[A-Za-z])/);
+      if (m) { pushKey(m[0]); pending = pending.slice(m[0].length); continue; }
+      if (!force && pending.length === 1) { escTimer = setTimeout(() => drain(true), 30); return; }
+      pushKey('\x1b'); pending = pending.slice(1); continue;
+    }
+    pushKey(pending[0]); pending = pending.slice(1);
+  }
+}
+function startKeys() {
+  if (started) return;
+  requireTTY();
+  started = true;
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (d) => { pending += d; drain(false); });
+  process.stdin.on('end', () => { ended = true; while (WAITERS.length) WAITERS.shift()('\x03'); });
+}
+function keyReader() {
+  startKeys();
+  return () => {
+    if (KEYQ.length) return Promise.resolve(KEYQ.shift());
+    if (ended) return Promise.resolve('\x03');
+    return new Promise((res) => WAITERS.push(res));
+  };
+}
+function endKeys() {
+  try { process.stdin.setRawMode(false); } catch {}
+  process.stdin.pause();
+}
+function parse(d) {
+  if (d === '\x03' || d === '\x04') return 'abort';
+  if (d === '\r' || d === '\n') return 'enter';
+  if (d === '\x1b') return 'esc';
+  if (d === ' ') return 'space';
+  if (d === '\x7f' || d === '\x08') return 'back';
+  if (d === '\x1b[A' || d === '\x1bOA' || d === 'k') return 'up';
+  if (d === '\x1b[B' || d === '\x1bOB' || d === 'j') return 'down';
+  return d;
+}
+
+/** 單選 / 多選清單。items: [{label, value, hint}] */
+async function select(title, items, { multi = false, preselected = [], footer = '' } = {}) {
+  if (!items.length) { console.log(`${C.dim}(沒有可選項目)${C.reset}`); return multi ? [] : null; }
+  const next = keyReader();
+  const chosen = new Set(preselected);
+  let cur = 0, drawn = 0;
+  const render = () => {
+    if (drawn) out(`\x1b[${drawn}A`);
+    let buf = '';
+    const line = (s) => { buf += '\x1b[2K' + s + '\n'; };
+    line(`${C.bold}${title}${C.reset}`);
+    items.forEach((it, i) => {
+      const box = multi ? (chosen.has(it.value) ? `${C.green}[x]${C.reset}` : '[ ]') : '   ';
+      const label = i === cur ? `${C.cyan}❯ ${it.label}${C.reset}` : `  ${it.label}`;
+      line(`  ${box} ${label}${it.hint ? ` ${C.dim}${it.hint}${C.reset}` : ''}`);
+    });
+    line(`${C.dim}${footer || (multi ? '↑↓ 移動  空白 選取  Enter 確認  Esc 取消' : '↑↓ 移動  Enter 確認  Esc 取消')}${C.reset}`);
+    drawn = items.length + 2;
+    out(buf);
+  };
+  out('\x1b[?25l');
+  render();
+  try {
+    for (;;) {
+      const k = parse(await next());
+      if (k === 'abort') { endKeys(); out('\x1b[?25h\n'); process.exit(130); }
+      if (k === 'esc') return multi ? null : null;
+      if (k === 'up') cur = (cur - 1 + items.length) % items.length;
+      else if (k === 'down') cur = (cur + 1) % items.length;
+      else if (k === 'space' && multi) { const v = items[cur].value; chosen.has(v) ? chosen.delete(v) : chosen.add(v); }
+      else if (k === 'enter') return multi ? [...chosen] : items[cur].value;
+      render();
+    }
+  } finally { out('\x1b[?25h'); }
+}
+
+async function ask(question, initial = '') {
+  const next = keyReader();
+  let val = initial, drawn = false;
+  const render = () => { if (drawn) out('\x1b[1A'); out(`\x1b[2K${C.bold}${question}${C.reset} ${val}${C.dim}▏${C.reset}\n`); drawn = true; };
+  render();
+  for (;;) {
+    const k = parse(await next());
+    if (k === 'abort') { endKeys(); out('\n'); process.exit(130); }
+    if (k === 'esc') return null;
+    if (k === 'enter') return val.trim();
+    if (k === 'back') val = val.slice(0, -1);
+    else if (k.length === 1 && k >= ' ') val += k;
+    render();
+  }
+}
+async function confirm(question, def = true) {
+  const v = await select(question, [
+    { label: def ? '是 (預設)' : '是', value: true },
+    { label: def ? '否' : '否 (預設)', value: false },
+  ], { footer: '↑↓ 移動  Enter 確認' });
+  return v === null ? def : v;
+}
+
+// ── 互動流程 ────────────────────────────────────────────────────────────
+async function uiToggle(m) {
+  const names = Object.keys(m.groups).sort();
+  if (!names.length) { console.log(`${C.dim}還沒有群組，先「建立群組」。${C.reset}`); return; }
+  const items = names.map((g) => {
+    const st = groupState(g, m.groups[g].skills);
+    return { label: `${badge(st)}  ${g}`, value: g, hint: `${m.groups[g].skills.length} 個 · ${m.groups[g].skills.join(', ')}` };
+  });
+  const g = await select('選擇要切換的群組', items);
+  if (!g) return;
+  const st = groupState(g, m.groups[g].skills);
+  console.log('');
+  if (st === 'loaded') { unloadGroup(m, g); console.log(`\n群組 ${C.bold}${g}${C.reset} ${C.gray}已卸載${C.reset}`); }
+  else { loadGroup(m, g); console.log(`\n群組 ${C.bold}${g}${C.reset} ${C.green}已載入${C.reset}`); }
+  console.log(`${C.dim}開新的 agent session 才會生效。${C.reset}`);
+}
+
+async function uiCreate(m) {
+  const free = freeSkills(m);
+  if (!free.length) { console.log(`${C.dim}skills/ 裡沒有未編組的 skill 可加入。${C.reset}`); return; }
+  const name = await ask('群組名稱：');
+  if (!name) return;
+  if (m.groups[name]) { console.log(`${C.red}群組 ${name} 已存在${C.reset}`); return; }
+  if (!/^[\w.-]+$/.test(name)) { console.log(`${C.red}名稱只接受英數 . _ -${C.reset}`); return; }
+  console.log('');
+  const picked = await select(`要編入 ${C.bold}${name}${C.reset} 的 skills`, free.map((s) => ({ label: s, value: s })), { multi: true });
+  if (!picked || !picked.length) { console.log(`${C.dim}未選取，取消。${C.reset}`); return; }
+  m.groups[name] = { skills: picked };
+  saveManifest(m);
+  console.log(`\n${C.green}已建立${C.reset} ${C.bold}${name}${C.reset}：${picked.join(', ')}\n`);
+  if (await confirm('立即卸載（移入 vault，各家 agent 看不到）?', true)) { console.log(''); unloadGroup(m, name); }
+}
+
+async function uiEdit(m) {
+  const names = Object.keys(m.groups).sort();
+  if (!names.length) { console.log(`${C.dim}還沒有群組。${C.reset}`); return; }
+  const g = await select('選擇群組', names.map((n) => ({ label: n, value: n, hint: m.groups[n].skills.join(', ') })));
+  if (!g) return;
+  console.log('');
+  const act = await select(`${C.bold}${g}${C.reset} — 要做什麼？`, [
+    { label: '增減成員', value: 'members' },
+    { label: '重新命名', value: 'rename' },
+    { label: '刪除群組（成員搬回 skills/ 並載入）', value: 'delete' },
+  ]);
+  console.log('');
+  if (act === 'members') {
+    const st = groupState(g, m.groups[g].skills);
+    const pool = [...new Set([...m.groups[g].skills, ...freeSkills(m)])].sort();
+    const picked = await select(`${C.bold}${g}${C.reset} 的成員`, pool.map((s) => ({ label: s, value: s })), { multi: true, preselected: m.groups[g].skills });
+    if (!picked) return;
+    const added = picked.filter((s) => !m.groups[g].skills.includes(s));
+    const removed = m.groups[g].skills.filter((s) => !picked.includes(s));
+    m.groups[g].skills = picked;
+    saveManifest(m);
+    console.log('');
+    for (const s of removed) if (inVault(g, s)) { moveDir(vaultPath(g, s), path.join(SKILLS, s)); linkAgents(m, s, console.log); }
+    if (st === 'unloaded') for (const s of added) { unlinkAgents(m, s, console.log); if (inSkills(s)) moveDir(path.join(SKILLS, s), vaultPath(g, s)); }
+    console.log(`\n${C.green}已更新${C.reset} ${g}：+${added.length} -${removed.length}`);
+  } else if (act === 'rename') {
+    const nn = await ask('新名稱：', g);
+    if (!nn || nn === g) return;
+    if (m.groups[nn]) { console.log(`${C.red}${nn} 已存在${C.reset}`); return; }
+    if (fs.existsSync(path.join(VAULT, g))) moveDir(path.join(VAULT, g), path.join(VAULT, nn));
+    m.groups[nn] = m.groups[g]; delete m.groups[g];
+    saveManifest(m);
+    console.log(`${C.green}已改名${C.reset} ${g} → ${nn}`);
+  } else if (act === 'delete') {
+    if (!await confirm(`確定刪除群組 ${g}？（skill 本身不會被刪，會搬回 skills/）`, false)) return;
+    console.log('');
+    loadGroup(m, g);
+    delete m.groups[g];
+    saveManifest(m);
+    try { fs.rmdirSync(path.join(VAULT, g)); } catch {}
+    console.log(`\n${C.green}已刪除群組${C.reset} ${g}`);
+  }
+}
+
+async function menu() {
+  for (;;) {
+    const m = loadManifest();
+    printStatus(m);
+    const act = await select('skillgrp', [
+      { label: '載入 / 卸載群組', value: 'toggle' },
+      { label: '建立群組', value: 'create' },
+      { label: '編輯群組（成員 / 改名 / 刪除）', value: 'edit' },
+      { label: '重新整理檢視', value: 'refresh' },
+      { label: '離開', value: 'quit' },
+    ], { footer: '↑↓ 移動  Enter 確認  Ctrl-C 離開' });
+    console.log('');
+    if (act === 'toggle') await uiToggle(m);
+    else if (act === 'create') await uiCreate(m);
+    else if (act === 'edit') await uiEdit(m);
+    else if (act === 'quit' || act === null) { endKeys(); return; }
+    if (act !== 'refresh') {
+      console.log('');
+      await select('', [{ label: '返回主選單', value: 1 }], { footer: 'Enter 返回' });
+    }
+    out('\x1b[2J\x1b[H');
+  }
+}
+
+// ── 入口 ────────────────────────────────────────────────────────────────
+const USAGE = `${C.bold}skillgrp${C.reset} — 互動式 skill 群組管理
+
+  skillgrp                 進入互動介面
+  skillgrp ls              列出群組與狀態
+  skillgrp load <群組>...   載入（vault → skills/ 並連結各家 agent）
+  skillgrp unload <群組>... 卸載（拔連結 → 搬回 vault）
+  skillgrp sync            重新連結所有已載入 skill 到各家 agent
+  skillgrp update          全部載入 → npx skills update → 還原原本狀態
+
+佈局：${tilde(SKILLS)} / ${tilde(VAULT)} / ${tilde(MANIFEST)}`;
+
+(async () => {
+  const [cmd, ...args] = process.argv.slice(2);
+  const m = loadManifest();
+  if (!cmd) { fs.mkdirSync(SKILLS, { recursive: true }); out('\x1b[2J\x1b[H'); await menu(); process.exit(0); }
+  switch (cmd) {
+    case 'ls': case 'status': printStatus(m); break;
+    case 'load': case 'unload': {
+      if (!args.length) die(`用法：skillgrp ${cmd} <群組>...`);
+      for (const g of args) {
+        if (!m.groups[g]) die(`沒有群組 ${g}`);
+        cmd === 'load' ? loadGroup(m, g) : unloadGroup(m, g);
+      }
+      console.log(`${C.dim}開新的 agent session 才會生效。${C.reset}`);
+      break;
+    }
+    case 'sync': for (const s of listDir(SKILLS)) linkAgents(m, s, console.log); break;
+    case 'update': {
+      const off = Object.keys(m.groups).filter((g) => groupState(g, m.groups[g].skills) !== 'loaded');
+      for (const g of off) loadGroup(m, g, () => {});
+      console.log(`${C.dim}暫時載入：${off.join(', ') || '(無)'}${C.reset}`);
+      require('child_process').spawnSync('npx', ['-y', 'skills', 'update', '-g', '-y'], { stdio: 'inherit' });
+      for (const g of off) unloadGroup(m, g, () => {});
+      console.log(`${C.dim}已還原卸載狀態：${off.join(', ') || '(無)'}${C.reset}`);
+      break;
+    }
+    default: console.log(USAGE);
+  }
+  process.exit(0);
+})().catch((e) => die(e.stack || e.message));
