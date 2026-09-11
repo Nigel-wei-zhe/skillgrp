@@ -65,7 +65,7 @@ skillgrp
 ↑↓ 移動  Enter 確認  Ctrl-C 離開
 ```
 
-- **建立群組** — 輸入名稱 → 從「未編組」多選（空白鍵勾選）→ 問要不要立即卸載（預設是）
+- **建立群組** — 輸入名稱 → 從「未編組」多選（空白鍵勾選、`a` 全選/全不選）→ 問要不要立即卸載（預設是）
 - **編輯群組** — 增減成員 / 改名（vault 目錄跟著改）/ 刪除（成員搬回並重新連結，不刪 skill 本身）
 
 ### 子指令
@@ -82,6 +82,9 @@ skillgrp
 | `skillgrp delete <群組>`（別名 `rm`） | 刪除群組，成員搬回 `skills/` 並載入，不刪 skill 本身 |
 | `skillgrp add <群組> <skill>...` | 加入成員 |
 | `skillgrp drop <群組> <skill>...` | 移除成員 |
+| `skillgrp doctor` | 健康檢查：孤兒 vault 目錄、群組成員遺失、skill 沒連好所有 agent |
+| `skillgrp ls --json` | 機器可讀的狀態輸出，方便串接其他腳本 |
+| `skillgrp --version` / `-v` | 顯示版本號 |
 
 以上非互動指令跟互動介面共用同一套邏輯，適合寫進 dotfiles 初始化腳本或 CI。
 

@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const pkg = require('./package.json');
 
 const HOME = process.env.SKILLGRP_HOME || os.homedir();
 const ROOT = path.join(HOME, '.agents');
@@ -144,7 +145,50 @@ function setGroupMembers(m, g, picked, log = console.log) {
   return { added, removed };
 }
 
+// ── 健康檢查 ────────────────────────────────────────────────────────────
+/** 掃出跟目前 manifest 對不上的殘留：vault 裡沒有群組認領的目錄、群組成員兩邊都找不到、
+ *  free skill 沒連到所有 agent。回傳 issue 清單，供 doctor 指令與其他地方共用。 */
+function doctorReport(m) {
+  const issues = [];
+  for (const vg of listDir(VAULT)) {
+    if (!m.groups[vg]) issues.push({ type: 'orphan-vault', group: vg, skills: listDir(path.join(VAULT, vg)) });
+  }
+  for (const [g, def] of Object.entries(m.groups)) {
+    for (const s of def.skills) if (!inSkills(s) && !inVault(g, s)) issues.push({ type: 'missing-skill', group: g, skill: s });
+  }
+  const dirs = agentDirs(m);
+  for (const s of listDir(SKILLS)) {
+    const missing = dirs.filter((d) => !fs.existsSync(path.join(d, s)));
+    if (missing.length) issues.push({ type: 'unlinked', skill: s, dirs: missing.map(tilde) });
+  }
+  return issues;
+}
+function printDoctor(m) {
+  const issues = doctorReport(m);
+  if (!issues.length) { console.log(`${C.green}沒有發現問題${C.reset}`); return; }
+  for (const it of issues) {
+    if (it.type === 'orphan-vault') console.log(`${C.yellow}孤兒${C.reset}    vault/${it.group}/ 不屬於任何群組（成員：${it.skills.join(', ') || '(空)'}）`);
+    else if (it.type === 'missing-skill') console.log(`${C.red}遺失${C.reset}    群組 ${it.group} 的成員 ${it.skill} 在 skills/ 與 vault 都找不到`);
+    else if (it.type === 'unlinked') console.log(`${C.yellow}未連結${C.reset}  ${it.skill} 沒連到：${it.dirs.join(', ')}（跑 skillgrp sync）`);
+  }
+  process.exitCode = 1;
+}
+
 // ── 純文字輸出 ──────────────────────────────────────────────────────────
+/** ls --json 用的純資料版本，跟 printStatus 分開維護，避免把顏色碼混進機器可讀輸出 */
+function statusData(m) {
+  const dirs = agentDirs(m);
+  const groups = Object.keys(m.groups).sort().map((g) => {
+    const sk = m.groups[g].skills;
+    return {
+      name: g,
+      state: groupState(g, sk),
+      skills: sk.map((s) => ({ name: s, state: inSkills(s) ? 'loaded' : inVault(g, s) ? 'vaulted' : 'missing' })),
+    };
+  });
+  const free = freeSkills(m).map((s) => ({ name: s, linked: dirs.every((d) => fs.existsSync(path.join(d, s))) }));
+  return { root: tilde(ROOT), groups, free, agentDirs: dirs.map((d) => tilde(path.dirname(d))) };
+}
 const badge = (st) => ({
   loaded: `${C.green}● 已載入${C.reset}`, unloaded: `${C.gray}○ 未載入${C.reset}`,
   mixed: `${C.yellow}◐ 不一致${C.reset}`, empty: `${C.gray}· 空群組${C.reset}`,
@@ -249,7 +293,7 @@ async function select(title, items, { multi = false, preselected = [], footer = 
       const label = i === cur ? `${C.cyan}❯ ${it.label}${C.reset}` : `  ${it.label}`;
       line(`  ${box} ${label}${it.hint ? ` ${C.dim}${it.hint}${C.reset}` : ''}`);
     });
-    line(`${C.dim}${footer || (multi ? '↑↓ 移動  空白 選取  Enter 確認  Esc 取消' : '↑↓ 移動  Enter 確認  Esc 取消')}${C.reset}`);
+    line(`${C.dim}${footer || (multi ? '↑↓ 移動  空白 選取  a 全選/全不選  Enter 確認  Esc 取消' : '↑↓ 移動  Enter 確認  Esc 取消')}${C.reset}`);
     drawn = items.length + 2;
     out(buf);
   };
@@ -263,6 +307,7 @@ async function select(title, items, { multi = false, preselected = [], footer = 
       if (k === 'up') cur = (cur - 1 + items.length) % items.length;
       else if (k === 'down') cur = (cur + 1) % items.length;
       else if (k === 'space' && multi) { const v = items[cur].value; chosen.has(v) ? chosen.delete(v) : chosen.add(v); }
+      else if (k === 'a' && multi) { chosen.size === items.length ? chosen.clear() : items.forEach((it) => chosen.add(it.value)); }
       else if (k === 'enter') return multi ? [...chosen] : items[cur].value;
       render();
     }
@@ -402,15 +447,21 @@ const USAGE = `${C.bold}skillgrp${C.reset} — 互動式 skill 群組管理
   skillgrp delete <群組>              刪除群組（成員搬回 skills/ 並載入，不刪 skill 本身；別名 rm）
   skillgrp add <群組> <skill>...      加入成員
   skillgrp drop <群組> <skill>...     移除成員
+  skillgrp doctor              健康檢查：孤兒 vault 目錄 / 遺失成員 / 沒連好的 free skill
+  skillgrp ls --json           機器可讀的狀態輸出
+  skillgrp --version           顯示版本號
 
 佈局：${tilde(SKILLS)} / ${tilde(VAULT)} / ${tilde(MANIFEST)}`;
 
 (async () => {
   const [cmd, ...args] = process.argv.slice(2);
+  if (cmd === '--version' || cmd === '-v') { console.log(pkg.version); process.exit(0); }
+  if (cmd === '--help' || cmd === '-h' || cmd === 'help') { console.log(USAGE); process.exit(0); }
   const m = loadManifest();
   if (!cmd) { fs.mkdirSync(SKILLS, { recursive: true }); out('\x1b[2J\x1b[H'); await menu(); process.exit(0); }
   switch (cmd) {
-    case 'ls': case 'status': printStatus(m); break;
+    case 'ls': case 'status': args.includes('--json') ? console.log(JSON.stringify(statusData(m), null, 2)) : printStatus(m); break;
+    case 'doctor': printDoctor(m); break;
     case 'load': case 'unload': {
       if (!args.length) die(`用法：skillgrp ${cmd} <群組>...`);
       let anyFailed = false;
