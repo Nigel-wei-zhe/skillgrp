@@ -31,17 +31,28 @@ skillgrp 加上一層「群組開關」，實體只有一份，靠搬移 + symli
 
 ## 安裝
 
+不用裝，直接用 `npx` 執行最快：
+
 ```bash
-cp skillgrp ~/.local/bin/skillgrp && chmod +x ~/.local/bin/skillgrp
+npx skillgrp
 ```
 
-或在本目錄 `npm link`。需要 Node >= 18。
+想要在任何目錄都能直接打 `skillgrp`，可以全域安裝：
+
+```bash
+npm install -g skillgrp
+```
+
+或從原始碼：`cp skillgrp ~/.local/bin/skillgrp && chmod +x ~/.local/bin/skillgrp`，或在本目錄 `npm link`。
+需要 Node >= 18。
 
 ## 用法
 
 直接執行進入互動介面：
 
 ```bash
+npx skillgrp
+# 或全域安裝後
 skillgrp
 ```
 
