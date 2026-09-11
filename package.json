@@ -1,6 +1,6 @@
 {
   "name": "skillgrp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "互動式 agent skill 群組管理 — 依情境載入/卸載 skills，並同步 symlink 到各家 AI agent",
   "bin": {
     "skillgrp": "skillgrp"
@@ -23,5 +23,11 @@
   "bugs": {
     "url": "https://github.com/Nigel-wei-zhe/skillgrp/issues"
   },
-  "keywords": ["skills", "agent", "claude", "cli", "symlink"]
+  "keywords": [
+    "skills",
+    "agent",
+    "claude",
+    "cli",
+    "symlink"
+  ]
 }
