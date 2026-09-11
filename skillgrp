@@ -30,6 +30,8 @@ const C = {
 };
 const tilde = (p) => p.startsWith(HOME) ? '~' + p.slice(HOME.length) : p;
 const die = (msg) => { console.error(`${C.red}error:${C.reset} ${msg}`); process.exit(1); };
+/** 群組名稱會直接接到 vault/<name>/ 底下，禁止跳出該目錄的名稱（如 . / ..） */
+const isValidGroupName = (n) => /^[\w.-]+$/.test(n) && n !== '.' && n !== '..';
 
 // ── 狀態 ────────────────────────────────────────────────────────────────
 function loadManifest() {
@@ -291,7 +293,7 @@ async function uiCreate(m) {
   const name = await ask('群組名稱：');
   if (!name) return;
   if (m.groups[name]) { console.log(`${C.red}群組 ${name} 已存在${C.reset}`); return; }
-  if (!/^[\w.-]+$/.test(name)) { console.log(`${C.red}名稱只接受英數 . _ -${C.reset}`); return; }
+  if (!isValidGroupName(name)) { console.log(`${C.red}名稱只接受英數 . _ -，且不能是 . 或 ..${C.reset}`); return; }
   console.log('');
   const picked = await select(`要編入 ${C.bold}${name}${C.reset} 的 skills`, free.map((s) => ({ label: s, value: s })), { multi: true });
   if (!picked || !picked.length) { console.log(`${C.dim}未選取，取消。${C.reset}`); return; }
@@ -329,6 +331,7 @@ async function uiEdit(m) {
   } else if (act === 'rename') {
     const nn = await ask('新名稱：', g);
     if (!nn || nn === g) return;
+    if (!isValidGroupName(nn)) { console.log(`${C.red}名稱只接受英數 . _ -，且不能是 . 或 ..${C.reset}`); return; }
     if (m.groups[nn]) { console.log(`${C.red}${nn} 已存在${C.reset}`); return; }
     if (fs.existsSync(path.join(VAULT, g))) moveDir(path.join(VAULT, g), path.join(VAULT, nn));
     m.groups[nn] = m.groups[g]; delete m.groups[g];
