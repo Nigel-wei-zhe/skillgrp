@@ -78,7 +78,8 @@ function linkAgents(m, skill, log) {
       continue;
     }
     try { fs.unlinkSync(dest); } catch {}
-    fs.symlinkSync(path.join('../../.agents/skills', skill), dest);
+    const rel = path.relative(dir, path.join(SKILLS, skill));
+    fs.symlinkSync(rel, dest);
     log(`${C.green}link${C.reset}  ${tilde(dest)}`);
   }
 }
