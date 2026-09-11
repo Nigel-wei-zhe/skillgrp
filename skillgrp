@@ -325,6 +325,7 @@ async function ask(question, initial = '') {
     if (k === 'esc') return null;
     if (k === 'enter') return val.trim();
     if (k === 'back') val = val.slice(0, -1);
+    else if (k === 'space') val += ' ';
     else if (k.length === 1 && k >= ' ') val += k;
     render();
   }
@@ -409,6 +410,29 @@ async function uiEdit(m) {
   }
 }
 
+async function uiAgentDirs(m) {
+  const current = m.agentDirs || DEFAULT_AGENT_DIRS;
+  const candidates = [...new Set([...DEFAULT_AGENT_DIRS, ...current])].sort();
+  const picked = await select(
+    '同步對象（相對於 $HOME 的路徑，勾選要連結的 agent 目錄）',
+    candidates.map((d) => ({ label: d, value: d })),
+    { multi: true, preselected: current },
+  );
+  if (picked === null) return;
+  console.log('');
+  const extra = await ask('手動加其他路徑？（用空白分隔多個，直接 Enter 跳過）：');
+  const bad = [];
+  for (const e of (extra ? extra.split(/\s+/).filter(Boolean) : [])) {
+    if (path.isAbsolute(e) || e.split('/').includes('..')) { bad.push(e); continue; }
+    picked.push(e);
+  }
+  if (bad.length) console.log(`${C.red}略過${C.reset}（不能是絕對路徑或包含 ..）：${bad.join(', ')}`);
+  m.agentDirs = [...new Set(picked)].sort();
+  saveManifest(m);
+  console.log(`\n${C.green}已更新同步對象${C.reset}：${m.agentDirs.join(', ') || '(無)'}`);
+  console.log(`${C.dim}跑 skillgrp sync 套用到新目標。${C.reset}`);
+}
+
 async function menu() {
   for (;;) {
     const m = loadManifest();
@@ -417,6 +441,7 @@ async function menu() {
       { label: '載入 / 卸載群組', value: 'toggle' },
       { label: '建立群組', value: 'create' },
       { label: '編輯群組（成員 / 改名 / 刪除）', value: 'edit' },
+      { label: '同步對象設定', value: 'agents' },
       { label: '重新整理檢視', value: 'refresh' },
       { label: '離開', value: 'quit' },
     ], { footer: '↑↓ 移動  Enter 確認  Ctrl-C 離開' });
@@ -424,6 +449,7 @@ async function menu() {
     if (act === 'toggle') await uiToggle(m);
     else if (act === 'create') await uiCreate(m);
     else if (act === 'edit') await uiEdit(m);
+    else if (act === 'agents') await uiAgentDirs(m);
     else if (act === 'quit' || act === null) { endKeys(); return; }
     if (act !== 'refresh') {
       console.log('');
