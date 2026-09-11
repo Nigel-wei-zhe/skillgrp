@@ -216,8 +216,8 @@ function printStatus(m) {
     console.log(`  ${linked ? C.green + "●" : C.yellow + "◐"}${C.reset} ${s}${linked ? "" : ` ${C.dim}(未連結到部分 agent — 跑 skillgrp sync)${C.reset}`}`);
   }
   const dirs = agentDirs(m).map((d) => tilde(path.dirname(d)));
-  console.log(`\n${C.dim}同步對象：${dirs.join('  ') || '(無)'}${C.reset}`);
-  console.log(`${C.dim}切換後需開新的 agent session 才會生效。${C.reset}\n`);
+  console.log(`\n${C.bold}同步對象${C.reset}${C.dim}：${C.reset}${C.cyan}${dirs.join('  ') || '(無)'}${C.reset}`);
+  console.log(`${C.yellow}切換後需開新的 agent session 才會生效。${C.reset}\n`);
 }
 
 // ── 互動元件 ────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ async function uiToggle(m) {
   console.log('');
   if (st === 'loaded') { unloadGroup(m, g); console.log(`\n群組 ${C.bold}${g}${C.reset} ${C.gray}已卸載${C.reset}`); }
   else { loadGroup(m, g); console.log(`\n群組 ${C.bold}${g}${C.reset} ${C.green}已載入${C.reset}`); }
-  console.log(`${C.dim}開新的 agent session 才會生效。${C.reset}`);
+  console.log(`${C.yellow}開新的 agent session 才會生效。${C.reset}`);
 }
 
 async function uiCreate(m) {
@@ -496,7 +496,7 @@ const USAGE = `${C.bold}skillgrp${C.reset} — 互動式 skill 群組管理
         const failed = cmd === 'load' ? loadGroup(m, g) : unloadGroup(m, g);
         if (failed.length) anyFailed = true;
       }
-      console.log(`${C.dim}開新的 agent session 才會生效。${C.reset}`);
+      console.log(`${C.yellow}開新的 agent session 才會生效。${C.reset}`);
       if (anyFailed) process.exitCode = 1;
       break;
     }
